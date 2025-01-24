@@ -1,7 +1,7 @@
 import os
 from PIL import Image
 import pillow_heif  # Ensure this is installed
-from multiprocessing import Process, Queue
+from multiprocessing import Pool
 from tqdm import tqdm
 import subprocess
 
@@ -10,7 +10,7 @@ pillow_heif.register_heif_opener()
 
 # Function to list available directories for the user to select from
 def select_directory(available_directories):
-    print("Select the directory containing the heic files:")
+    print("Select the directory containing the HEIC files:")
     for i, directory in enumerate(available_directories):
         print(f"{i + 1}. {directory}")
 
@@ -34,17 +34,18 @@ def get_heic_files(path):
     return files
 
 # Function to convert HEIC to JPG
-def convert_heic_to_jpg(file_path, destination_directory, queue):
+def convert_heic_to_jpg(args):
+    file_path, destination_directory = args
     try:
         with Image.open(file_path) as img:
             img = img.convert("RGB")
             new_filename = os.path.splitext(os.path.basename(file_path))[0] + ".jpg"
             destination_path = os.path.join(destination_directory, new_filename)
             img.save(destination_path, "JPEG")
-        queue.put(1)  # Notify success
+        return 1  # Notify success
     except Exception as e:
-        queue.put(0)  # Notify failure
         print(f"Failed to convert {os.path.basename(file_path)}: {e}")
+        return 0  # Notify failure
 
 if __name__ == "__main__":
     print("Installing dependencies...\n\n")
@@ -71,27 +72,15 @@ if __name__ == "__main__":
         print("No HEIC files found in the selected directory.")
         exit()
 
-    # Create a Queue for progress tracking
-    queue = Queue()
+    # Prepare the arguments for each conversion
+    args = [(file, destination_directory) for file in files]
 
     # Initialize the progress bar
     with tqdm(total=total_files, desc="Converting HEIC files", unit="file") as progress_bar:
-        # Convert files using multiprocessing
-        procs = []
-        for file in files:
-            proc = Process(target=convert_heic_to_jpg, args=(file, destination_directory, queue))
-            procs.append(proc)
-            proc.start()
-
-        # Update the progress bar as files are processed
-        completed_files = 0
-        while completed_files < total_files:
-            queue.get()  # Wait for a signal from a worker
-            completed_files += 1
-            progress_bar.update(1)
-
-        # Wait for all processes to complete
-        for proc in procs:
-            proc.join()
+        # Convert files using a pool of processes
+        with Pool() as pool:
+            for result in pool.imap_unordered(convert_heic_to_jpg, args):
+                if result == 1:
+                    progress_bar.update(1)  # Update the progress bar for each successful conversion
 
     print("Conversion completed!")
